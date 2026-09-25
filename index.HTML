@@ -1,0 +1,1465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>智能工地位置打卡系统 - Worksite QR & Geofence Clock System</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- html5-qrcode for live scanner -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <!-- qrcodejs for generating QR codes -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    .nav-tab.active { border-bottom: 3px solid #2563eb; color: #2563eb; font-weight: 700; }
+    #qr-reader video { border-radius: 0.75rem; object-fit: cover; }
+    @media print {
+      body * { visibility: hidden; }
+      #printable-qr-area, #printable-qr-area * { visibility: visible; }
+      #printable-qr-area { position: absolute; left: 0; top: 0; width: 100%; }
+    }
+  </style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800 pb-12">
+
+  <!-- Header Section -->
+  <header class="bg-slate-900 text-white shadow-lg sticky top-0 z-40">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-3">
+      <div class="flex items-center space-x-3">
+        <div class="bg-blue-600 p-2.5 rounded-xl shadow-md">
+          <i class="fa-solid fa-map-location-dot text-white text-xl"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-lg leading-tight" id="app-title">建筑工地扫码签到系统</h1>
+          <p class="text-xs text-slate-400" id="app-subtitle">多语言 · GPS 严格位置校验 (200米限制)</p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-2">
+        <!-- Language Switcher -->
+        <div class="relative inline-block">
+          <select id="lang-select" onchange="changeLanguage(this.value)" class="bg-slate-800 border border-slate-700 text-slate-200 text-xs font-medium rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500">
+            <option value="zh">华语 (Chinese)</option>
+            <option value="en" selected>English</option>
+            <option value="ta">தமிழ் (Tamil)</option>
+            <option value="bn">বাংলা (Bengali)</option>
+          </select>
+        </div>
+
+        <!-- Admin View Toggle Button -->
+        <button onclick="requestAdminAccess()" id="admin-toggle-btn" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 px-3 py-2 rounded-lg transition flex items-center gap-1.5 font-medium">
+          <i class="fa-solid fa-lock text-amber-400" id="admin-lock-icon"></i>
+          <span id="btn-admin-label">管理员后台</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Navigation Bar (User vs Admin Views) -->
+  <div class="bg-white border-b border-slate-200 shadow-sm mb-6">
+    <div class="max-w-6xl mx-auto px-4 flex space-x-6 text-sm font-medium">
+      <button onclick="switchView('clockin')" id="nav-clockin" class="nav-tab active py-3 flex items-center gap-2">
+        <i class="fa-solid fa-qrcode"></i> <span id="nav-clockin-txt">员工打卡 (Clock In/Out)</span>
+      </button>
+      <button onclick="requestAdminAccess()" id="nav-admin" class="nav-tab py-3 flex items-center gap-2">
+        <i class="fa-solid fa-chart-line"></i> <span id="nav-admin-txt">管理员中心 (Admin Console)</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- MAIN CONTAINER -->
+  <main class="max-w-6xl mx-auto px-4">
+
+    <!-- ========================================== -->
+    <!-- VIEW 1: WORKER CLOCK-IN / CHECK-OUT MODULE -->
+    <!-- ========================================== -->
+    <div id="view-clockin" class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- Left Panel: Clock Form -->
+      <div class="lg:col-span-7 space-y-6">
+        <div class="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+          
+          <!-- Shift Type Selection -->
+          <div class="mb-6">
+            <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2" id="lbl-shift-type">选择打卡类型</label>
+            <div class="grid grid-cols-2 gap-3">
+              <button type="button" id="btn-type-in" onclick="setClockType('IN')" class="py-3 px-4 rounded-xl border-2 border-emerald-500 bg-emerald-50 text-emerald-700 font-bold flex items-center justify-center gap-2 transition">
+                <i class="fa-solid fa-right-to-bracket text-lg"></i>
+                <span id="txt-type-in">上班签到 (Check In)</span>
+              </button>
+              <button type="button" id="btn-type-out" onclick="setClockType('OUT')" class="py-3 px-4 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-600 font-bold flex items-center justify-center gap-2 transition">
+                <i class="fa-solid fa-right-from-bracket text-lg"></i>
+                <span id="txt-type-out">下班签退 (Check Out)</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- User Inputs -->
+          <div class="space-y-4">
+            <div>
+              <label class="block text-xs font-bold text-slate-600 mb-1" id="lbl-name">员工姓名 Full Name *</label>
+              <div class="relative">
+                <i class="fa-solid fa-user absolute left-3.5 top-3.5 text-slate-400"></i>
+                <input type="text" id="input-name" placeholder="例: Tan Ah Kow" class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition">
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-bold text-slate-600 mb-1" id="lbl-fin">FIN / 准证号码 FIN Number *</label>
+              <div class="relative">
+                <i class="fa-solid fa-id-card absolute left-3.5 top-3.5 text-slate-400"></i>
+                <input type="text" id="input-fin" placeholder="例: G1234567X" class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm uppercase focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition">
+              </div>
+            </div>
+
+            <!-- Site Selection / Scanner -->
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label class="block text-xs font-bold text-slate-600" id="lbl-site">项目工程名称 Worksite *</label>
+                <button type="button" onclick="openCameraScanner()" class="text-xs text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1">
+                  <i class="fa-solid fa-camera"></i> <span id="txt-scan-qr">扫描现场二维码</span>
+                </button>
+              </div>
+              <div class="relative">
+                <i class="fa-solid fa-building-user absolute left-3.5 top-3.5 text-slate-400"></i>
+                <select id="select-site" onchange="onSiteChange()" class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none transition appearance-none">
+                  <!-- Sites populated via JS -->
+                </select>
+                <i class="fa-solid fa-chevron-down absolute right-3.5 top-3.5 text-slate-400 pointer-events-none"></i>
+              </div>
+            </div>
+          </div>
+
+          <!-- GPS Validation Status Box -->
+          <div class="mt-6 p-4 rounded-xl border bg-slate-50 space-y-3" id="gps-status-box">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold uppercase tracking-wider text-slate-500" id="lbl-gps-check">GPS 实时物理定位校验</span>
+              <button onclick="requestCurrentLocation()" class="text-xs bg-white border border-slate-300 px-2.5 py-1 rounded-lg text-slate-700 hover:bg-slate-100 flex items-center gap-1">
+                <i class="fa-solid fa-rotate text-blue-600"></i> <span id="txt-refresh-gps">刷新 GPS</span>
+              </button>
+            </div>
+
+            <div id="gps-info-card" class="p-3 rounded-lg border bg-amber-50 border-amber-200 text-amber-800 text-xs space-y-1">
+              <div class="flex items-center gap-2 font-bold text-sm">
+                <i class="fa-solid fa-spinner fa-spin text-amber-600" id="gps-status-icon"></i>
+                <span id="gps-status-title">正在获取您的实际地理位置...</span>
+              </div>
+              <p id="gps-status-desc">系统将强行校验您与打卡站点的实际距离，超过 200 米将禁止签到/签出。</p>
+            </div>
+
+            <!-- Realtime Metrics -->
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div class="bg-white p-2.5 rounded-lg border border-slate-200">
+                <span class="text-slate-400 block text-[10px]" id="txt-my-coords">您的坐标 My GPS</span>
+                <span id="val-user-coords" class="font-mono font-medium text-slate-700">未获取 (Acquiring)</span>
+              </div>
+              <div class="bg-white p-2.5 rounded-lg border border-slate-200">
+                <span class="text-slate-400 block text-[10px]" id="txt-dist-target">距站点距离 Distance</span>
+                <span id="val-distance" class="font-mono font-bold text-slate-700">-- 米 (m)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Submit Button -->
+          <button type="button" id="btn-submit" onclick="submitAttendance()" class="mt-6 w-full py-4 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition flex items-center justify-center gap-2 text-base">
+            <i class="fa-solid fa-check-circle"></i>
+            <span id="txt-submit-btn">确认签到 (Clock In Now)</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Right Panel: Personal Today's Logs & Scanner Modal Placeholder -->
+      <div class="lg:col-span-5 space-y-6">
+        
+        <!-- Live Scanner Container (Hidden by default) -->
+        <div id="scanner-modal" class="hidden bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+          <div class="flex justify-between items-center mb-3">
+            <h3 class="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <i class="fa-solid fa-qrcode text-blue-600"></i>
+              <span id="txt-scanner-title">扫描工地二维码</span>
+            </h3>
+            <button onclick="closeCameraScanner()" class="text-slate-400 hover:text-slate-600 text-sm">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          <div id="qr-reader" class="w-full bg-slate-900 rounded-xl overflow-hidden"></div>
+          <p class="text-xs text-slate-500 mt-2 text-center" id="txt-scan-hint">对准现场的主管二维码进行自动识别</p>
+        </div>
+
+        <!-- Quick Site Info Card -->
+        <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 space-y-3">
+          <h3 class="font-bold text-slate-800 text-xs uppercase tracking-wider text-slate-400" id="txt-current-site-info">当前所选站点预设信息</h3>
+          <div class="bg-blue-50/60 rounded-xl p-3.5 border border-blue-100">
+            <div class="font-bold text-blue-900 text-sm" id="site-display-name">--</div>
+            <div class="text-xs text-blue-700 mt-1 flex items-center gap-2">
+              <i class="fa-solid fa-location-dot"></i>
+              <span id="site-display-coords">经纬度: --, --</span>
+            </div>
+            <div class="text-xs text-blue-600 mt-0.5">
+              <i class="fa-solid fa-shield-halved"></i>
+              <span id="txt-allowed-radius">允许误差范围: 200 米以内</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Recent Personal Logs -->
+        <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200">
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="font-bold text-slate-800 text-sm" id="txt-my-today-logs">本日个人打卡记录</h3>
+            <span class="text-[10px] bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full" id="my-log-count">0 条</span>
+          </div>
+          <div id="personal-logs-list" class="space-y-2.5 max-h-[300px] overflow-y-auto pr-1">
+            <div class="text-center py-8 text-slate-400 text-xs" id="txt-no-personal-logs">
+              <i class="fa-regular fa-clipboard text-2xl mb-2 block text-slate-300"></i>
+              暂无今日签到签出记录
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ========================================== -->
+    <!-- VIEW 2: ADMIN DASHBOARD & SITE MANAGEMENT -->
+    <!-- ========================================== -->
+    <div id="view-admin" class="hidden space-y-6">
+
+      <!-- Admin Top Metrics Cards -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+          <span class="text-xs font-semibold text-slate-400" id="stat-lbl-total">累计打卡总次数</span>
+          <div class="text-2xl font-black text-slate-800 mt-1" id="stat-total-logs">0</div>
+        </div>
+        <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+          <span class="text-xs font-semibold text-slate-400" id="stat-lbl-today-in">今日签到人数</span>
+          <div class="text-2xl font-black text-emerald-600 mt-1" id="stat-today-in">0</div>
+        </div>
+        <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+          <span class="text-xs font-semibold text-slate-400" id="stat-lbl-today-out">今日签退人数</span>
+          <div class="text-2xl font-black text-blue-600 mt-1" id="stat-today-out">0</div>
+        </div>
+        <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+          <span class="text-xs font-semibold text-slate-400" id="stat-lbl-workers">近2个月活跃人数</span>
+          <div class="text-2xl font-black text-indigo-600 mt-1" id="stat-active-workers">0</div>
+        </div>
+      </div>
+
+      <!-- Admin Sub-Navigation (Tabs) -->
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="flex border-b border-slate-200 bg-slate-50/50 text-xs font-bold overflow-x-auto">
+          <button onclick="switchAdminTab('summary')" id="tab-btn-summary" class="px-5 py-3.5 border-b-2 border-blue-600 text-blue-600 bg-white flex items-center gap-2 whitespace-nowrap">
+            <i class="fa-solid fa-calendar-day"></i> <span id="txt-tab-summary">每日打卡汇总</span>
+          </button>
+          <button onclick="switchAdminTab('worker')" id="tab-btn-worker" class="px-5 py-3.5 text-slate-500 border-b-2 border-transparent hover:text-slate-700 flex items-center gap-2 whitespace-nowrap">
+            <i class="fa-solid fa-user-clock"></i> <span id="txt-tab-worker">员工近2个月考勤</span>
+          </button>
+          <button onclick="switchAdminTab('sites')" id="tab-btn-sites" class="px-5 py-3.5 text-slate-500 border-b-2 border-transparent hover:text-slate-700 flex items-center gap-2 whitespace-nowrap">
+            <i class="fa-solid fa-location-dot text-amber-500"></i> <span>工地站点及经纬度管理</span>
+          </button>
+          <button onclick="switchAdminTab('qr')" id="tab-btn-qr" class="px-5 py-3.5 text-slate-500 border-b-2 border-transparent hover:text-slate-700 flex items-center gap-2 whitespace-nowrap">
+            <i class="fa-solid fa-print"></i> <span id="txt-tab-qr">主管工地二维码生成器</span>
+          </button>
+        </div>
+
+        <div class="p-5">
+          <!-- TAB 1: DAILY SUMMARY -->
+          <div id="admin-tab-summary" class="space-y-4">
+            <div class="flex flex-wrap justify-between items-center gap-3">
+              <div class="flex items-center gap-2">
+                <input type="date" id="filter-date" onchange="renderAdminSummary()" class="bg-slate-50 border border-slate-300 text-xs rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 font-medium">
+                <select id="filter-site" onchange="renderAdminSummary()" class="bg-slate-50 border border-slate-300 text-xs rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500 font-medium">
+                  <option value="ALL">所有工地站点 All Sites</option>
+                </select>
+              </div>
+              <button onclick="exportToCSV()" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm">
+                <i class="fa-solid fa-file-excel"></i> <span id="txt-export-csv">导出 Excel CSV</span>
+              </button>
+            </div>
+
+            <!-- Summary Table -->
+            <div class="overflow-x-auto rounded-xl border border-slate-200">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                    <th class="p-3" id="th-time">时间 Timestamp</th>
+                    <th class="p-3" id="th-type">类型 Type</th>
+                    <th class="p-3" id="th-name">员工姓名 Worker Name</th>
+                    <th class="p-3" id="th-fin">FIN 号码</th>
+                    <th class="p-3" id="th-site">项目站点 Worksite</th>
+                    <th class="p-3" id="th-dist">位置偏差 Distance</th>
+                  </tr>
+                </thead>
+                <tbody id="summary-table-body" class="divide-y divide-slate-100">
+                  <!-- Rendered JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- TAB 2: WORKER 2-MONTH LOGS -->
+          <div id="admin-tab-worker" class="hidden space-y-4">
+            <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-wrap items-center gap-3">
+              <div class="flex-1 min-w-[200px]">
+                <label class="block text-[11px] font-bold text-slate-500 mb-1" id="lbl-select-worker">选择或搜寻员工 Worker Search</label>
+                <select id="worker-select-dropdown" onchange="renderWorker2MonthLogs()" class="w-full bg-white border border-slate-300 rounded-lg p-2 text-xs font-semibold focus:ring-2 focus:ring-blue-500 outline-none">
+                  <!-- Populate via JS -->
+                </select>
+              </div>
+              <div class="text-xs text-slate-500 bg-white p-2.5 rounded-lg border border-slate-200 flex items-center gap-2">
+                <i class="fa-solid fa-calendar-check text-blue-600"></i>
+                <span id="txt-range-info">查询区间: 最近 60 天打卡记录</span>
+              </div>
+            </div>
+
+            <!-- Worker Specific Logs -->
+            <div class="overflow-x-auto rounded-xl border border-slate-200">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                    <th class="p-3">日期 Date</th>
+                    <th class="p-3">打卡类型 Type</th>
+                    <th class="p-3">精确时间 Time</th>
+                    <th class="p-3">所在工地 Site Name</th>
+                    <th class="p-3">定位 GPS Distance</th>
+                  </tr>
+                </thead>
+                <tbody id="worker-history-table-body" class="divide-y divide-slate-100">
+                  <!-- Rendered JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- TAB 3: WORKSITE & COORDINATES EDITING (NEW) -->
+          <div id="admin-tab-sites" class="hidden space-y-6">
+            <div class="flex justify-between items-center">
+              <div>
+                <h4 class="font-bold text-slate-800 text-sm">工地名称及经纬度设置</h4>
+                <p class="text-xs text-slate-500">管理员可修改现有工地的位置参数，或增加新的施工项目。打卡程序将依据此经纬度强行比对 200 米范畴。</p>
+              </div>
+              <button onclick="openAddSiteModal()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shadow-sm">
+                <i class="fa-solid fa-plus"></i> 新增项目站点
+              </button>
+            </div>
+
+            <!-- Site List Table -->
+            <div class="overflow-x-auto rounded-xl border border-slate-200">
+              <table class="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr class="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
+                    <th class="p-3">站点 ID</th>
+                    <th class="p-3">工地项目名称 Worksite Name</th>
+                    <th class="p-3">纬度 (Latitude)</th>
+                    <th class="p-3">经度 (Longitude)</th>
+                    <th class="p-3 text-right">操作 Action</th>
+                  </tr>
+                </thead>
+                <tbody id="site-manage-table-body" class="divide-y divide-slate-100">
+                  <!-- Rendered via JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- TAB 4: SUPERVISOR QR GENERATOR -->
+          <div id="admin-tab-qr" class="hidden space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div class="space-y-3">
+                <h4 class="font-bold text-sm text-slate-800" id="txt-gen-qr-title">生成工地现场防伪二维码</h4>
+                <p class="text-xs text-slate-500" id="txt-gen-qr-desc">主管在此生成包含工地地理坐标的二维码，打印后粘贴在工地入口处。</p>
+                
+                <div>
+                  <label class="block text-xs font-bold text-slate-600 mb-1">选择目标站点 Target Site</label>
+                  <select id="qr-gen-site-select" onchange="updateGeneratedQR()" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-semibold outline-none focus:ring-2 focus:ring-blue-500">
+                    <!-- Populated JS -->
+                  </select>
+                </div>
+
+                <button onclick="window.print()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-2">
+                  <i class="fa-solid fa-print"></i> <span id="txt-print-qr">打印二维码标牌 (Print Banner)</span>
+                </button>
+              </div>
+
+              <!-- QR Printable Canvas Area -->
+              <div class="flex justify-center items-center">
+                <div id="printable-qr-area" class="bg-white p-6 border-4 border-slate-900 rounded-2xl text-center space-y-3 shadow-md max-w-xs w-full">
+                  <div class="bg-slate-900 text-white py-1 px-3 rounded-full text-[10px] font-black uppercase tracking-widest inline-block">Official QR Tag</div>
+                  <h2 id="qr-card-site-name" class="font-extrabold text-base text-slate-900 leading-tight">Site Name</h2>
+                  <div id="qrcode-container" class="flex justify-center py-2"></div>
+                  <p class="text-[10px] font-mono text-slate-500" id="qr-card-coords">GPS: 0.000, 0.000</p>
+                  <p class="text-[10px] font-bold text-slate-700 uppercase" id="qr-card-foot">扫码打卡 · 200米极值校验</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ========================================== -->
+  <!-- MODAL 1: ADMIN LOGIN PASSWORD MODAL -->
+  <!-- ========================================== -->
+  <div id="admin-login-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4 border border-slate-200">
+      <div class="text-center space-y-1">
+        <div class="w-12 h-12 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto text-xl mb-2">
+          <i class="fa-solid fa-shield-halved"></i>
+        </div>
+        <h3 class="font-bold text-slate-900 text-base">管理员身份验证</h3>
+        <p class="text-xs text-slate-500">请提交管理员口令进入管理控制台</p>
+      </div>
+
+      <div>
+        <label class="block text-xs font-bold text-slate-600 mb-1">后台访问密码 Password</label>
+        <input type="password" id="admin-pass-input" placeholder="请输入密码 (默认: admin123)" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+
+      <div class="flex gap-2 pt-2">
+        <button onclick="closeAdminLoginModal()" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition">取消 Cancel</button>
+        <button onclick="verifyAdminPassword()" class="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition">解锁进入 Login</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================== -->
+  <!-- MODAL 2: ADD / EDIT SITE LOCATION MODAL -->
+  <!-- ========================================== -->
+  <div id="site-edit-modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 border border-slate-200">
+      <div class="flex justify-between items-center border-b pb-3">
+        <h3 class="font-bold text-slate-900 text-sm" id="site-modal-title">编辑项目工地坐标</h3>
+        <button onclick="closeSiteModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <input type="hidden" id="edit-site-id">
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-bold text-slate-600 mb-1">工地项目名称 Site Name *</label>
+          <input type="text" id="edit-site-name" placeholder="例: Woodlands MRT Interchange" class="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">纬度 Latitude *</label>
+            <input type="number" step="0.000001" id="edit-site-lat" placeholder="例: 1.3521" class="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div>
+            <label class="block text-xs font-bold text-slate-600 mb-1">经度 Longitude *</label>
+            <input type="number" step="0.000001" id="edit-site-lng" placeholder="例: 103.8198" class="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+        </div>
+        <button type="button" onclick="fillCurrentLocationToModal()" class="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 pt-1">
+          <i class="fa-solid fa-location-crosshairs"></i> 自动填入我当前的真实 GPS 经纬度
+        </button>
+      </div>
+
+      <div class="flex gap-2 pt-2 border-t">
+        <button onclick="closeSiteModal()" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition">取消</button>
+        <button onclick="saveSiteData()" class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition">保存生效</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toast Container -->
+  <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2 pointer-events-none"></div>
+
+  <!-- JavaScript Logic -->
+  <script>
+    // Multi-Language Strings
+    const i18n = {
+      zh: {
+        appTitle: "建筑工地扫码签到系统",
+        appSubtitle: "多语言 · GPS 严格位置校验 (200米限制)",
+        btnAdmin: "管理员后台",
+        navClockin: "员工打卡 (Clock In/Out)",
+        navAdmin: "管理员中心 (Admin Console)",
+        lblShiftType: "选择打卡类型",
+        txtTypeIn: "上班签到 (Check In)",
+        txtTypeOut: "下班签退 (Check Out)",
+        lblName: "员工姓名 Full Name *",
+        lblFin: "FIN / 准证号码 FIN Number *",
+        lblSite: "项目工程名称 Worksite *",
+        txtScanQr: "扫描现场二维码",
+        lblGpsCheck: "GPS 实时物理定位校验",
+        txtRefreshGps: "刷新 GPS",
+        gpsTitleAcquiring: "正在获取您的实际地理位置...",
+        gpsDescAcquiring: "系统将强行校验您与打卡站点的实际距离，超过 200 米将禁止签到/签出。",
+        txtMyCoords: "您的坐标 My GPS",
+        txtDistTarget: "距站点距离 Distance",
+        txtSubmitBtnIn: "确认签到 (Clock In Now)",
+        txtSubmitBtnOut: "确认签退 (Clock Out Now)",
+        txtScannerTitle: "扫描工地二维码",
+        txtScanHint: "对准现场的主管二维码进行自动识别",
+        txtCurrentSiteInfo: "当前所选站点预设信息",
+        txtAllowedRadius: "允许误差范围: 200 米以内",
+        txtMyTodayLogs: "本日个人打卡记录",
+        txtNoPersonalLogs: "暂无今日签到签出记录",
+        statTotal: "累计打卡总次数",
+        statTodayIn: "今日签到人数",
+        statTodayOut: "今日签退人数",
+        statActiveWorkers: "近2个月活跃人数",
+        tabSummary: "每日打卡汇总",
+        tabWorker: "员工近2个月考勤",
+        tabQr: "主管工地二维码生成器",
+        txtExportCsv: "导出 Excel CSV",
+        lblSelectWorker: "选择或搜寻员工 Worker Search",
+        txtRangeInfo: "查询区间: 最近 60 天打卡记录",
+        txtGenQrTitle: "生成工地现场防伪二维码",
+        txtGenQrDesc: "主管在此生成包含工地地理坐标的二维码，打印后粘贴在工地入口处。",
+        txtPrintQr: "打印二维码标牌 (Print Banner)",
+        msgDistanceTooFar: "拒绝打卡：您当前距离站点 {dist} 米，超过了 200 米的最大限制范围！",
+        msgNoGps: "无法定位：请允许浏览器获取地理位置权限，否则无法打卡！",
+        msgSuccessIn: "签到成功！距离站点 {dist} 米。",
+        msgSuccessOut: "签退成功！距离站点 {dist} 米。"
+      },
+      en: {
+        appTitle: "Worksite QR & Geofence Clock-In System",
+        appSubtitle: "Multi-Language · Strict GPS Geofence (200m Limit)",
+        btnAdmin: "Admin Portal",
+        navClockin: "Worker Clock In/Out",
+        navAdmin: "Admin Console",
+        lblShiftType: "Select Attendance Action",
+        txtTypeIn: "Clock In (Start Shift)",
+        txtTypeOut: "Clock Out (End Shift)",
+        lblName: "Full Name *",
+        lblFin: "FIN / Permit Number *",
+        lblSite: "Project Worksite *",
+        txtScanQr: "Scan Site QR Code",
+        lblGpsCheck: "Real-time Physical GPS Verification",
+        txtRefreshGps: "Refresh GPS",
+        gpsTitleAcquiring: "Acquiring your physical coordinates...",
+        gpsDescAcquiring: "Your location is strictly checked. Over 200m distance will REJECT clocking.",
+        txtMyCoords: "My GPS Coordinates",
+        txtDistTarget: "Distance to Site",
+        txtSubmitBtnIn: "Confirm Clock In",
+        txtSubmitBtnOut: "Confirm Clock Out",
+        txtScannerTitle: "Scan Worksite QR Code",
+        txtScanHint: "Align camera with supervisor's on-site QR code",
+        txtCurrentSiteInfo: "Selected Worksite Parameters",
+        txtAllowedRadius: "Allowed Geofence Radius: Within 200m",
+        txtMyTodayLogs: "My Today's Attendance Logs",
+        txtNoPersonalLogs: "No clock-in/out records for today",
+        statTotal: "Total Clock-Ins Recorded",
+        statTodayIn: "Today Clocked In",
+        statTodayOut: "Today Clocked Out",
+        statActiveWorkers: "Active Workers (60 Days)",
+        tabSummary: "Daily Summary Log",
+        tabWorker: "Worker 2-Month History",
+        tabQr: "Supervisor QR Generator",
+        txtExportCsv: "Export Excel CSV",
+        lblSelectWorker: "Select / Search Worker",
+        txtRangeInfo: "Filter Range: Last 60 Days Logs",
+        txtGenQrTitle: "Generate Site Anti-Counterfeit QR Tag",
+        txtGenQrDesc: "Supervisors generate site QR code encoded with GPS coords to print & display.",
+        txtPrintQr: "Print QR Banner Badge",
+        msgDistanceTooFar: "Clock-in Rejected: You are {dist}m away from site. Limit is 200m!",
+        msgNoGps: "GPS Access Denied: Location permission is strictly required to clock in/out!",
+        msgSuccessIn: "Clock In Successful! Distance: {dist}m.",
+        msgSuccessOut: "Clock Out Successful! Distance: {dist}m."
+      },
+      ta: {
+        appTitle: "தள வருகைப்பதிவு முறைமை",
+        appSubtitle: "பல மொழிகள் · கண்டிப்பான GPS தூர வரம்பு (200m)",
+        btnAdmin: "நிர்வாகி பக்கம்",
+        navClockin: "வருகைப்பதிவு (Clock In/Out)",
+        navAdmin: "நிர்வாக மையம்",
+        lblShiftType: "செயலைத் தேர்ந்தெடுக்கவும்",
+        txtTypeIn: "வேலை தொடக்கம் (Check In)",
+        txtTypeOut: "வேலை முடிவு (Check Out)",
+        lblName: "முழு பெயர் *",
+        lblFin: "FIN எண் *",
+        lblSite: "திட்டத்தின் பெயர் *",
+        txtScanQr: "QR குறியீட்டை ஸ்கேன் செய்",
+        lblGpsCheck: "GPS உண்மை இருப்பிட சரிபார்ப்பு",
+        txtRefreshGps: "புதுப்பி",
+        gpsTitleAcquiring: "உங்கள் இருப்பிடம் பெறப்படுகிறது...",
+        gpsDescAcquiring: "200 மீட்டருக்கு மேல் தூரம் இருந்தால் வருகைப்பதிவு நிராகரிக்கப்படும்.",
+        txtMyCoords: "உங்கள் GPS",
+        txtDistTarget: "தளத்தின் தூரம்",
+        txtSubmitBtnIn: "வருகையைப் பதிவுசெய்",
+        txtSubmitBtnOut: "வெளியேறுவதைப் பதிவுசெய்",
+        txtScannerTitle: "QR குறியீட்டை ஸ்கேன் செய்",
+        txtScanHint: "கேமராவை QR குறியீட்டின் மேல் வைக்கவும்",
+        txtCurrentSiteInfo: "தேர்ந்தெடுக்கப்பட்ட தளம்",
+        txtAllowedRadius: "அனுமதிக்கப்பட்ட தூரம்: 200m",
+        txtMyTodayLogs: "இன்றைய பதிவு",
+        txtNoPersonalLogs: "இன்று பதிவுகள் எதுவும் இல்லை",
+        statTotal: "மொத்த பதிவுகள்",
+        statTodayIn: "இன்று உள்வந்தோர்",
+        statTodayOut: "இன்று வெளியேறியோர்",
+        statActiveWorkers: "60 நாள் ஊழியர்கள்",
+        tabSummary: "தினசரி அறிக்கை",
+        tabWorker: "2 மாத வரலாற்று அறிக்கை",
+        tabQr: "QR குறியீடு உருவாக்குதல்",
+        txtExportCsv: "CSV பதிவிறக்கம்",
+        lblSelectWorker: "ஊழியரைத் தேர்ந்தெடு",
+        txtRangeInfo: "கடந்த 60 நாட்களின் பதிவுகள்",
+        txtGenQrTitle: "QR குறியீடு உருவாக்கம்",
+        txtGenQrDesc: "மேற்பார்வையாளர் அச்சிடக்கூடிய QR குறியீட்டை உருவாக்கலாம்.",
+        txtPrintQr: "அச்சிடுக (Print)",
+        msgDistanceTooFar: "நிராகரிக்கப்பட்டது: நீங்கள் {dist}m தூரத்தில் உள்ளீர்கள் (வரம்பு 200m)!",
+        msgNoGps: "GPS தேவை: இருப்பிட அனுமதி வழங்கப்பட வேண்டும்!",
+        msgSuccessIn: "வெற்றிகரமாக பதிவு செய்யப்பட்டது! தூரம்: {dist}m.",
+        msgSuccessOut: "வெளியேறுவது பதிவானது! தூரம்: {dist}m."
+      },
+      bn: {
+        appTitle: "ওয়ার্কসাইট ক্লক-ইন সিস্টেম",
+        appSubtitle: "বহুভাষিক · কঠোর GPS সীমা (২০০ মিটার)",
+        btnAdmin: "অ্যাডমিন প্যানেল",
+        navClockin: "ক্লক ഇൻ / Out",
+        navAdmin: "অ্যাডমিন কনসোল",
+        lblShiftType: "টাইপ নির্বাচন করুন",
+        txtTypeIn: "কাজে যোগদান (Check In)",
+        txtTypeOut: "কাজ শেষ (Check Out)",
+        lblName: "পূর্ণ নাম *",
+        lblFin: "FIN নম্বর *",
+        lblSite: "প্রকল্পের নাম *",
+        txtScanQr: "QR কোড স্ক্যান করুন",
+        lblGpsCheck: "GPS অবস্থান যাচাইকরণ",
+        txtRefreshGps: "রিফ্রেশ করুন",
+        gpsTitleAcquiring: "আপনার অবস্থান নির্ণয় করা হচ্ছে...",
+        gpsDescAcquiring: "২০০ মিটারের বেশি দূরত্ব হলে ক্লক-ইন প্রত্যাখ্যান করা হবে।",
+        txtMyCoords: "আপনার GPS",
+        txtDistTarget: "সাইটের দূরত্ব",
+        txtSubmitBtnIn: "ক্লক-ইন নিশ্চিত করুন",
+        txtSubmitBtnOut: "ক্লক-আউট নিশ্চিত করুন",
+        txtScannerTitle: "QR কোড স্ক্যান করুন",
+        txtScanHint: "ক্যামেরা সাইটের QR কোডের সামনে রাখুন",
+        txtCurrentSiteInfo: "নির্বাচিত সাইটের তথ্য",
+        txtAllowedRadius: "অনুমোদিত সীমা: ২০০ মিটার",
+        txtMyTodayLogs: "আজকের উপস্থিতি রেকর্ড",
+        txtNoPersonalLogs: "আজকের কোনো রেকর্ড পাওয়া যায়নি",
+        statTotal: "মোট উপস্থিতি",
+        statTodayIn: "আজ ক্লক-ইন",
+        statTodayOut: "আজ ক্লক-আউট",
+        statActiveWorkers: "সক্রিয় কর্মী (৬০ দিন)",
+        tabSummary: "দৈনিক সারসংক্ষেপ",
+        tabWorker: "২ মাসের ইতিহাস",
+        tabQr: "QR কোড জেনারেটর",
+        txtExportCsv: "CSV এক্সপোর্ট করুন",
+        lblSelectWorker: "কর্মী নির্বাচন করুন",
+        txtRangeInfo: "সীমা: গত ৬০ দিনের রেকর্ড",
+        txtGenQrTitle: "সাইট QR কোড তৈরি করুন",
+        txtGenQrDesc: "সুপারভাইজার স্থান প্রিন্ট করার জন্য QR কোড তৈরি করতে পারেন।",
+        txtPrintQr: "প্রিন্ট করুন (Print)",
+        msgDistanceTooFar: "প্রত্যাখ্যান করা হয়েছে: সাইট থেকে আপনার দূরত্ব {dist} মিটার (সীমা ২০০ মিটার)!",
+        msgNoGps: "GPS প্রয়োজন: অবস্থান অনুমতি দিতে হবে!",
+        msgSuccessIn: "ক্লক-ইন সফল হয়েছে! দূরত্ব: {dist} মিটার।",
+        msgSuccessOut: "ক্লক-আউট সফল হয়েছে! দূরত্ব: {dist} মিটার।"
+      }
+    };
+
+    // Default Worksite Data
+    const DEFAULT_WORKSITES = [
+      { id: "site-01", name: "Jurong East MRT Extension (Site A)", lat: 1.3329, lng: 103.7436 },
+      { id: "site-02", name: "Tuas Mega Port Phase 2 (Site B)", lat: 1.2963, lng: 103.6371 },
+      { id: "site-03", name: "Changi Airport T5 Terminal (Site C)", lat: 1.3644, lng: 103.9915 },
+      { id: "site-04", name: "Marina Bay Financial Centre Sub-Site", lat: 1.2789, lng: 103.8536 }
+    ];
+
+    // App Global State
+    let currentLang = 'en';
+    let currentType = 'IN';
+    let userLat = null;
+    let userLng = null;
+    let worksitesList = [];
+    let selectedSite = null;
+    let calculatedDistance = null;
+    let html5QrCodeScanner = null;
+    let isAdminLoggedIn = false;
+    let adminPassword = "jianlin2008"; // Default Admin Password
+
+    // =========================================================================
+    // INITIALIZATION & DYNAMIC SITE STORAGE
+    // =========================================================================
+
+    window.addEventListener('DOMContentLoaded', () => {
+      loadWorksitesFromStorage();
+      initDemoDataIfEmpty();
+      setCurrentDateFilter();
+      populateSiteDropdowns();
+      requestCurrentLocation();
+    });
+
+    function loadWorksitesFromStorage() {
+      const stored = localStorage.getItem('site_master_list');
+      if (stored) {
+        worksitesList = JSON.parse(stored);
+      } else {
+        worksitesList = [...DEFAULT_WORKSITES];
+        saveWorksitesToStorage();
+      }
+      selectedSite = worksitesList[0];
+    }
+
+    function saveWorksitesToStorage() {
+      localStorage.setItem('site_master_list', JSON.stringify(worksitesList));
+    }
+
+    function populateSiteDropdowns() {
+      const selectSite = document.getElementById('select-site');
+      const filterSite = document.getElementById('filter-site');
+      const qrSite = document.getElementById('qr-gen-site-select');
+
+      selectSite.innerHTML = '';
+      qrSite.innerHTML = '';
+      filterSite.innerHTML = '<option value="ALL">所有工地站点 All Sites</option>';
+
+      worksitesList.forEach(site => {
+        const opt = `<option value="${site.id}">${site.name}</option>`;
+        selectSite.insertAdjacentHTML('beforeend', opt);
+        qrSite.insertAdjacentHTML('beforeend', opt);
+
+        const filterOpt = `<option value="${site.name}">${site.name}</option>`;
+        filterSite.insertAdjacentHTML('beforeend', filterOpt);
+      });
+
+      if (worksitesList.length > 0) {
+        selectedSite = worksitesList[0];
+        updateSiteInfoDisplay();
+        updateGeneratedQR();
+      }
+    }
+
+    function setCurrentDateFilter() {
+      const todayStr = new Date().toISOString().split('T')[0];
+      document.getElementById('filter-date').value = todayStr;
+    }
+
+    function initDemoDataIfEmpty() {
+      const existing = localStorage.getItem('site_attendance_db');
+      if (!existing) {
+        const sampleLogs = [];
+        const workers = [
+          { name: "Tan Ah Kow", fin: "G1234567X" },
+          { name: "Rahman Md Mizanur", fin: "F7654321A" },
+          { name: "Kumar Murugan", fin: "G8899112M" },
+          { name: "Chen Wei", fin: "G5432109Y" }
+        ];
+
+        const now = new Date();
+        for (let i = 0; i < 30; i++) {
+          const pastDate = new Date(now);
+          pastDate.setDate(now.getDate() - Math.floor(Math.random() * 50));
+          const w = workers[Math.floor(Math.random() * workers.length)];
+          const site = worksitesList[Math.floor(Math.random() * worksitesList.length)];
+          
+          sampleLogs.push({
+            id: 'log-' + Math.random().toString(36).substr(2, 9),
+            type: 'IN',
+            name: w.name,
+            fin: w.fin,
+            siteName: site.name,
+            timestamp: pastDate.toISOString(),
+            distance: Math.floor(Math.random() * 150) + 10
+          });
+
+          const outDate = new Date(pastDate);
+          outDate.setHours(outDate.getHours() + 8);
+          sampleLogs.push({
+            id: 'log-' + Math.random().toString(36).substr(2, 9),
+            type: 'OUT',
+            name: w.name,
+            fin: w.fin,
+            siteName: site.name,
+            timestamp: outDate.toISOString(),
+            distance: Math.floor(Math.random() * 150) + 10
+          });
+        }
+        localStorage.setItem('site_attendance_db', JSON.stringify(sampleLogs));
+      }
+    }
+
+    function getAttendanceDB() {
+      return JSON.parse(localStorage.getItem('site_attendance_db') || '[]');
+    }
+
+    function saveAttendanceRecord(record) {
+      const db = getAttendanceDB();
+      db.unshift(record);
+      localStorage.setItem('site_attendance_db', JSON.stringify(db));
+    }
+
+    // =========================================================================
+    // ADMIN AUTHENTICATION (PASSWORD ACCESS)
+    // =========================================================================
+
+    function requestAdminAccess() {
+      if (isAdminLoggedIn) {
+        switchView('admin');
+      } else {
+        document.getElementById('admin-login-modal').classList.remove('hidden');
+        document.getElementById('admin-pass-input').value = '';
+        document.getElementById('admin-pass-input').focus();
+      }
+    }
+
+    function closeAdminLoginModal() {
+      document.getElementById('admin-login-modal').classList.add('hidden');
+    }
+
+    function verifyAdminPassword() {
+      const enteredPass = document.getElementById('admin-pass-input').value;
+      if (enteredPass === adminPassword) {
+        isAdminLoggedIn = true;
+        closeAdminLoginModal();
+        
+        // Update Icon Indicator
+        const lockIcon = document.getElementById('admin-lock-icon');
+        lockIcon.className = "fa-solid fa-lock-open text-emerald-400";
+        
+        showToast("密码验证成功，已进入管理员控制台", "success");
+        switchView('admin');
+      } else {
+        showToast("密码错误！默认密码为: admin123", "error");
+      }
+    }
+
+    // =========================================================================
+    // DISTANCE MATH & GPS FETCH
+    // =========================================================================
+
+    function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371000; // Earth's radius in meters
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = 
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return Math.round(R * c);
+    }
+
+    function requestCurrentLocation() {
+      const statusIcon = document.getElementById('gps-status-icon');
+      const statusTitle = document.getElementById('gps-status-title');
+      const statusDesc = document.getElementById('gps-status-desc');
+      const gpsCard = document.getElementById('gps-info-card');
+      const valCoords = document.getElementById('val-user-coords');
+
+      statusIcon.className = "fa-solid fa-spinner fa-spin text-amber-600";
+      statusTitle.innerText = i18n[currentLang].gpsTitleAcquiring;
+      gpsCard.className = "p-3 rounded-lg border bg-amber-50 border-amber-200 text-amber-800 text-xs space-y-1";
+
+      if (!("geolocation" in navigator)) {
+        showNoGpsState(i18n[currentLang].msgNoGps);
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          userLat = position.coords.latitude;
+          userLng = position.coords.longitude;
+          valCoords.innerText = `${userLat.toFixed(4)}, ${userLng.toFixed(4)}`;
+          evaluateGeofenceDistance();
+        },
+        (error) => {
+          showNoGpsState(i18n[currentLang].msgNoGps);
+        },
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+      );
+    }
+
+    function showNoGpsState(msg) {
+      userLat = null;
+      userLng = null;
+      calculatedDistance = null;
+
+      document.getElementById('val-user-coords').innerText = "未允许 (Denied)";
+      document.getElementById('val-distance').innerText = "-- 米 (m)";
+
+      const statusIcon = document.getElementById('gps-status-icon');
+      const statusTitle = document.getElementById('gps-status-title');
+      const statusDesc = document.getElementById('gps-status-desc');
+      const gpsCard = document.getElementById('gps-info-card');
+
+      statusIcon.className = "fa-solid fa-triangle-exclamation text-red-600";
+      statusTitle.innerText = "GPS 定位缺失";
+      statusDesc.innerText = msg;
+      gpsCard.className = "p-3 rounded-lg border bg-red-50 border-red-200 text-red-800 text-xs space-y-1";
+
+      updateSubmitButtonStatus(false);
+    }
+
+    function evaluateGeofenceDistance() {
+      if (!userLat || !userLng || !selectedSite) return;
+
+      calculatedDistance = calculateHaversineDistance(userLat, userLng, selectedSite.lat, selectedSite.lng);
+      
+      const valDist = document.getElementById('val-distance');
+      const statusIcon = document.getElementById('gps-status-icon');
+      const statusTitle = document.getElementById('gps-status-title');
+      const statusDesc = document.getElementById('gps-status-desc');
+      const gpsCard = document.getElementById('gps-info-card');
+
+      valDist.innerText = `${calculatedDistance} 米 (m)`;
+
+      if (calculatedDistance <= 200) {
+        statusIcon.className = "fa-solid fa-circle-check text-emerald-600";
+        statusTitle.innerText = `定位通过: 距站点 ${calculatedDistance} 米`;
+        statusDesc.innerText = `在允许的 200 米半径以内，可以正常执行 ${currentType === 'IN' ? '签到' : '签出'}。`;
+        gpsCard.className = "p-3 rounded-lg border bg-emerald-50 border-emerald-200 text-emerald-800 text-xs space-y-1";
+        updateSubmitButtonStatus(true);
+      } else {
+        statusIcon.className = "fa-solid fa-ban text-red-600";
+        statusTitle.innerText = `严重偏差: 距站点 ${calculatedDistance} 米 (超出限制)`;
+        statusDesc.innerText = `您与所选站点的物理距离超过 200 米最大边界，系统强行拒绝打卡操作！`;
+        gpsCard.className = "p-3 rounded-lg border bg-red-50 border-red-200 text-red-800 text-xs space-y-1";
+        updateSubmitButtonStatus(false);
+      }
+    }
+
+    function updateSubmitButtonStatus(isValid) {
+      const btn = document.getElementById('btn-submit');
+      if (isValid) {
+        btn.disabled = false;
+        btn.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-slate-400');
+        btn.classList.add('bg-emerald-600', 'hover:bg-emerald-700');
+      } else {
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'cursor-not-allowed', 'bg-slate-400');
+        btn.classList.remove('bg-emerald-600', 'hover:bg-emerald-700');
+      }
+    }
+
+    function onSiteChange() {
+      const siteId = document.getElementById('select-site').value;
+      selectedSite = worksitesList.find(s => s.id === siteId) || worksitesList[0];
+      updateSiteInfoDisplay();
+      evaluateGeofenceDistance();
+    }
+
+    function updateSiteInfoDisplay() {
+      if (!selectedSite) return;
+      document.getElementById('site-display-name').innerText = selectedSite.name;
+      document.getElementById('site-display-coords').innerText = `经纬度: ${selectedSite.lat}, ${selectedSite.lng}`;
+    }
+
+    // =========================================================================
+    // WORKER CLOCK-IN / CHECK-OUT ACTIONS
+    // =========================================================================
+
+    function setClockType(type) {
+      currentType = type;
+      const btnIn = document.getElementById('btn-type-in');
+      const btnOut = document.getElementById('btn-type-out');
+      const submitTxt = document.getElementById('txt-submit-btn');
+
+      if (type === 'IN') {
+        btnIn.className = "py-3 px-4 rounded-xl border-2 border-emerald-500 bg-emerald-50 text-emerald-700 font-bold flex items-center justify-center gap-2 transition";
+        btnOut.className = "py-3 px-4 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-600 font-bold flex items-center justify-center gap-2 transition";
+        submitTxt.innerText = i18n[currentLang].txtSubmitBtnIn;
+      } else {
+        btnOut.className = "py-3 px-4 rounded-xl border-2 border-blue-500 bg-blue-50 text-blue-700 font-bold flex items-center justify-center gap-2 transition";
+        btnIn.className = "py-3 px-4 rounded-xl border-2 border-slate-200 bg-slate-50 text-slate-600 font-bold flex items-center justify-center gap-2 transition";
+        submitTxt.innerText = i18n[currentLang].txtSubmitBtnOut;
+      }
+
+      evaluateGeofenceDistance();
+    }
+
+    function submitAttendance() {
+      const name = document.getElementById('input-name').value.trim();
+      const fin = document.getElementById('input-fin').value.trim().toUpperCase();
+
+      if (!name || !fin) {
+        showToast("请填写真实姓名和 FIN 号码！", "error");
+        return;
+      }
+
+      if (userLat === null || userLng === null) {
+        showToast(i18n[currentLang].msgNoGps, "error");
+        return;
+      }
+
+      if (calculatedDistance === null || calculatedDistance > 200) {
+        const msg = i18n[currentLang].msgDistanceTooFar.replace('{dist}', calculatedDistance || '???');
+        showToast(msg, "error");
+        alert(`❌ 距离超限失败 (Geofence Violation):\n\n${msg}`);
+        return;
+      }
+
+      const record = {
+        id: 'log-' + Math.random().toString(36).substr(2, 9),
+        type: currentType,
+        name: name,
+        fin: fin,
+        siteName: selectedSite.name,
+        timestamp: new Date().toISOString(),
+        distance: calculatedDistance
+      };
+
+      saveAttendanceRecord(record);
+
+      const succMsg = currentType === 'IN' 
+        ? i18n[currentLang].msgSuccessIn.replace('{dist}', calculatedDistance)
+        : i18n[currentLang].msgSuccessOut.replace('{dist}', calculatedDistance);
+
+      showToast(succMsg, "success");
+
+      renderPersonalTodayLogs();
+      renderAdminSummary();
+    }
+
+    function renderPersonalTodayLogs() {
+      const fin = document.getElementById('input-fin').value.trim().toUpperCase();
+      const container = document.getElementById('personal-logs-list');
+      const countLabel = document.getElementById('my-log-count');
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const db = getAttendanceDB();
+
+      const myLogs = db.filter(log => {
+        const logDate = log.timestamp.split('T')[0];
+        return logDate === todayStr && (fin ? log.fin === fin : true);
+      });
+
+      countLabel.innerText = `${myLogs.length} 条`;
+
+      if (myLogs.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-8 text-slate-400 text-xs">
+            <i class="fa-regular fa-clipboard text-2xl mb-2 block text-slate-300"></i>
+            ${i18n[currentLang].txtNoPersonalLogs}
+          </div>`;
+        return;
+      }
+
+      container.innerHTML = myLogs.map(log => {
+        const time = new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const isIn = log.type === 'IN';
+        return `
+          <div class="p-3 rounded-xl border border-slate-100 bg-slate-50/70 flex items-center justify-between text-xs">
+            <div class="flex items-center gap-2.5">
+              <span class="px-2 py-1 rounded-md font-bold ${isIn ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}">
+                ${isIn ? 'IN 签到' : 'OUT 签退'}
+              </span>
+              <div>
+                <div class="font-bold text-slate-800">${log.siteName}</div>
+                <div class="text-[10px] text-slate-400">${time} · 误差 ${log.distance}m</div>
+              </div>
+            </div>
+            <div class="text-right font-mono text-[11px] font-bold text-slate-600">
+              ${log.name}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // =========================================================================
+    // ADMIN SITE MANAGEMENT (DYNAMIC LAT / LNG / NAME MODIFICATION)
+    // =========================================================================
+
+    function renderAdminSiteTable() {
+      const tbody = document.getElementById('site-manage-table-body');
+      tbody.innerHTML = worksitesList.map(site => `
+        <tr class="hover:bg-slate-50 text-xs">
+          <td class="p-3 font-mono text-slate-400">${site.id}</td>
+          <td class="p-3 font-bold text-slate-800">${site.name}</td>
+          <td class="p-3 font-mono text-slate-600">${site.lat}</td>
+          <td class="p-3 font-mono text-slate-600">${site.lng}</td>
+          <td class="p-3 text-right space-x-2">
+            <button onclick="openEditSiteModal('${site.id}')" class="text-blue-600 hover:text-blue-800 font-bold">
+              <i class="fa-solid fa-pen-to-square"></i> 编辑坐标
+            </button>
+            <button onclick="deleteSite('${site.id}')" class="text-red-500 hover:text-red-700 font-bold">
+              <i class="fa-solid fa-trash"></i> 删除
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function openAddSiteModal() {
+      document.getElementById('site-modal-title').innerText = "新增项目工地及经纬度";
+      document.getElementById('edit-site-id').value = "";
+      document.getElementById('edit-site-name').value = "";
+      document.getElementById('edit-site-lat').value = "";
+      document.getElementById('edit-site-lng').value = "";
+      document.getElementById('site-edit-modal').classList.remove('hidden');
+    }
+
+    function openEditSiteModal(siteId) {
+      const site = worksitesList.find(s => s.id === siteId);
+      if (!site) return;
+
+      document.getElementById('site-modal-title').innerText = "修改项目工地位置及经纬度";
+      document.getElementById('edit-site-id').value = site.id;
+      document.getElementById('edit-site-name').value = site.name;
+      document.getElementById('edit-site-lat').value = site.lat;
+      document.getElementById('edit-site-lng').value = site.lng;
+      document.getElementById('site-edit-modal').classList.remove('hidden');
+    }
+
+    function fillCurrentLocationToModal() {
+      if (userLat && userLng) {
+        document.getElementById('edit-site-lat').value = userLat.toFixed(6);
+        document.getElementById('edit-site-lng').value = userLng.toFixed(6);
+        showToast("已自动带入您的实际当前坐标！", "success");
+      } else {
+        showToast("尚未获取到您的 GPS 坐标，请先获取定位", "error");
+      }
+    }
+
+    function closeSiteModal() {
+      document.getElementById('site-edit-modal').classList.add('hidden');
+    }
+
+    function saveSiteData() {
+      const id = document.getElementById('edit-site-id').value;
+      const name = document.getElementById('edit-site-name').value.trim();
+      const lat = parseFloat(document.getElementById('edit-site-lat').value);
+      const lng = parseFloat(document.getElementById('edit-site-lng').value);
+
+      if (!name || isNaN(lat) || isNaN(lng)) {
+        showToast("请提供完整的工地名称和正确的经纬度数字！", "error");
+        return;
+      }
+
+      if (id) {
+        // Edit existing
+        const site = worksitesList.find(s => s.id === id);
+        if (site) {
+          site.name = name;
+          site.lat = lat;
+          site.lng = lng;
+        }
+      } else {
+        // Add new
+        const newId = 'site-' + String(worksitesList.length + 1).padStart(2, '0');
+        worksitesList.push({ id: newId, name: name, lat: lat, lng: lng });
+      }
+
+      saveWorksitesToStorage();
+      populateSiteDropdowns();
+      renderAdminSiteTable();
+      closeSiteModal();
+      showToast("工地设置已成功保存并立即生效！", "success");
+    }
+
+    function deleteSite(siteId) {
+      if (worksitesList.length <= 1) {
+        showToast("无法删除：系统中至少需要保留一个打卡工地", "error");
+        return;
+      }
+
+      if (confirm("确定要删除此工地站点吗？")) {
+        worksitesList = worksitesList.filter(s => s.id !== siteId);
+        saveWorksitesToStorage();
+        populateSiteDropdowns();
+        renderAdminSiteTable();
+        showToast("站点已成功删除", "info");
+      }
+    }
+
+    // =========================================================================
+    // ADMIN TAB SWITCHING & REPORTS
+    // =========================================================================
+
+    function switchAdminTab(tabKey) {
+      ['summary', 'worker', 'sites', 'qr'].forEach(k => {
+        document.getElementById(`admin-tab-${k}`).classList.add('hidden');
+        document.getElementById(`tab-btn-${k}`).className = "px-5 py-3.5 text-slate-500 border-b-2 border-transparent hover:text-slate-700 flex items-center gap-2 whitespace-nowrap";
+      });
+
+      document.getElementById(`admin-tab-${tabKey}`).classList.remove('hidden');
+      document.getElementById(`tab-btn-${tabKey}`).className = "px-5 py-3.5 border-b-2 border-blue-600 text-blue-600 bg-white font-bold flex items-center gap-2 whitespace-nowrap";
+
+      if (tabKey === 'summary') renderAdminSummary();
+      if (tabKey === 'worker') renderWorkerDropdownAndLogs();
+      if (tabKey === 'sites') renderAdminSiteTable();
+      if (tabKey === 'qr') updateGeneratedQR();
+    }
+
+    function renderAdminSummary() {
+      const db = getAttendanceDB();
+      const dateVal = document.getElementById('filter-date').value;
+      const siteVal = document.getElementById('filter-site').value;
+
+      const filtered = db.filter(log => {
+        const logDate = log.timestamp.split('T')[0];
+        const matchDate = dateVal ? logDate === dateVal : true;
+        const matchSite = siteVal !== 'ALL' ? log.siteName === siteVal : true;
+        return matchDate && matchSite;
+      });
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const todayLogs = db.filter(l => l.timestamp.split('T')[0] === todayStr);
+
+      document.getElementById('stat-total-logs').innerText = db.length;
+      document.getElementById('stat-today-in').innerText = todayLogs.filter(l => l.type === 'IN').length;
+      document.getElementById('stat-today-out').innerText = todayLogs.filter(l => l.type === 'OUT').length;
+
+      const sixtyDaysAgo = new Date();
+      sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+      const activeWorkers = new Set(db.filter(l => new Date(l.timestamp) >= sixtyDaysAgo).map(l => l.fin));
+      document.getElementById('stat-active-workers').innerText = activeWorkers.size;
+
+      const tbody = document.getElementById('summary-table-body');
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">当前筛选条件无打卡记录</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(l => {
+        const dateObj = new Date(l.timestamp);
+        const timeStr = `${dateObj.toLocaleDateString()} ${dateObj.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`;
+        const isIn = l.type === 'IN';
+        return `
+          <tr class="hover:bg-slate-50 text-xs">
+            <td class="p-3 font-mono text-slate-500">${timeStr}</td>
+            <td class="p-3">
+              <span class="px-2 py-0.5 rounded font-bold ${isIn ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}">
+                ${isIn ? 'Check In' : 'Check Out'}
+              </span>
+            </td>
+            <td class="p-3 font-bold text-slate-800">${l.name}</td>
+            <td class="p-3 font-mono uppercase text-slate-600">${l.fin}</td>
+            <td class="p-3 text-slate-700">${l.siteName}</td>
+            <td class="p-3 font-mono font-bold ${l.distance <= 200 ? 'text-emerald-600' : 'text-red-600'}">
+              ${l.distance}m ${l.distance <= 200 ? '✓' : '✗'}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function renderWorkerDropdownAndLogs() {
+      const db = getAttendanceDB();
+      const dropdown = document.getElementById('worker-select-dropdown');
+      
+      const workerMap = new Map();
+      db.forEach(l => {
+        if (!workerMap.has(l.fin)) {
+          workerMap.set(l.fin, l.name);
+        }
+      });
+
+      dropdown.innerHTML = '';
+      if (workerMap.size === 0) {
+        dropdown.innerHTML = '<option value="">暂无工人数据</option>';
+        return;
+      }
+
+      workerMap.forEach((name, fin) => {
+        dropdown.insertAdjacentHTML('beforeend', `<option value="${fin}">${name} (${fin})</option>`);
+      });
+
+      renderWorker2MonthLogs();
+    }
+
+    function renderWorker2MonthLogs() {
+      const selectedFin = document.getElementById('worker-select-dropdown').value;
+      const tbody = document.getElementById('worker-history-table-body');
+      
+      if (!selectedFin) {
+        tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-400">请选择要查询的员工</td></tr>`;
+        return;
+      }
+
+      const db = getAttendanceDB();
+      const sixtyDaysAgo = new Date();
+      sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+
+      const workerLogs = db.filter(l => l.fin === selectedFin && new Date(l.timestamp) >= sixtyDaysAgo);
+
+      if (workerLogs.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-400">该员工近 2 个月内无打卡记录</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = workerLogs.map(l => {
+        const d = new Date(l.timestamp);
+        const dateStr = d.toLocaleDateString();
+        const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const isIn = l.type === 'IN';
+        return `
+          <tr class="hover:bg-slate-50 text-xs">
+            <td class="p-3 font-mono text-slate-600">${dateStr}</td>
+            <td class="p-3">
+              <span class="px-2 py-0.5 rounded font-bold ${isIn ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'}">
+                ${isIn ? 'Check In 签到' : 'Check Out 签退'}
+              </span>
+            </td>
+            <td class="p-3 font-mono text-slate-800 font-bold">${timeStr}</td>
+            <td class="p-3 text-slate-700">${l.siteName}</td>
+            <td class="p-3 font-mono text-emerald-600 font-bold">${l.distance}m</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function updateGeneratedQR() {
+      const siteId = document.getElementById('qr-gen-site-select').value;
+      const targetSite = worksitesList.find(s => s.id === siteId) || worksitesList[0];
+
+      if (!targetSite) return;
+
+      document.getElementById('qr-card-site-name').innerText = targetSite.name;
+      document.getElementById('qr-card-coords').innerText = `GPS: ${targetSite.lat}, ${targetSite.lng}`;
+
+      const container = document.getElementById('qrcode-container');
+      container.innerHTML = '';
+
+      const qrData = JSON.stringify({ siteId: targetSite.id, lat: targetSite.lat, lng: targetSite.lng });
+      new QRCode(container, {
+        text: qrData,
+        width: 160,
+        height: 160,
+        colorDark: "#0f172a",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.H
+      });
+    }
+
+    function exportToCSV() {
+      const db = getAttendanceDB();
+      if (db.length === 0) {
+        showToast("无历史打卡记录可导出", "error");
+        return;
+      }
+
+      let csvContent = "data:text/csv;charset=utf-8,\uFEFF";
+      csvContent += "Record ID,Timestamp,Type,Name,FIN,Worksite,Distance(m)\n";
+
+      db.forEach(l => {
+        csvContent += `"${l.id}","${l.timestamp}","${l.type}","${l.name}","${l.fin}","${l.siteName}","${l.distance}"\n`;
+      });
+
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Worksite_Attendance_Report_${new Date().toISOString().split('T')[0]}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    // =========================================================================
+    // CAMERA & UI UTILITY FUNCTIONS
+    // =========================================================================
+
+    function openCameraScanner() {
+      document.getElementById('scanner-modal').classList.remove('hidden');
+      if (html5QrCodeScanner) {
+        html5QrCodeScanner.clear();
+      }
+
+      html5QrCodeScanner = new Html5QrcodeScanner("qr-reader", { fps: 10, qrbox: 220 });
+      html5QrCodeScanner.render((decodedText) => {
+        try {
+          const data = JSON.parse(decodedText);
+          if (data && data.siteId) {
+            document.getElementById('select-site').value = data.siteId;
+            onSiteChange();
+            showToast("扫码成功：已自动匹配工地站点！", "success");
+            closeCameraScanner();
+          }
+        } catch (e) {
+          showToast("识别失败：非本工程专用二维码", "error");
+        }
+      }, (error) => {});
+    }
+
+    function closeCameraScanner() {
+      if (html5QrCodeScanner) {
+        html5QrCodeScanner.clear();
+      }
+      document.getElementById('scanner-modal').classList.add('hidden');
+    }
+
+    function changeLanguage(langKey) {
+      currentLang = langKey;
+      const t = i18n[langKey];
+
+      document.getElementById('app-title').innerText = t.appTitle;
+      document.getElementById('app-subtitle').innerText = t.appSubtitle;
+      document.getElementById('btn-admin-label').innerText = t.btnAdmin;
+      document.getElementById('nav-clockin-txt').innerText = t.navClockin;
+      document.getElementById('nav-admin-txt').innerText = t.navAdmin;
+      document.getElementById('lbl-shift-type').innerText = t.lblShiftType;
+      document.getElementById('txt-type-in').innerText = t.txtTypeIn;
+      document.getElementById('txt-type-out').innerText = t.txtTypeOut;
+      document.getElementById('lbl-name').innerText = t.lblName;
+      document.getElementById('lbl-fin').innerText = t.lblFin;
+      document.getElementById('lbl-site').innerText = t.lblSite;
+      document.getElementById('txt-scan-qr').innerText = t.txtScanQr;
+      document.getElementById('lbl-gps-check').innerText = t.lblGpsCheck;
+      document.getElementById('txt-refresh-gps').innerText = t.txtRefreshGps;
+      document.getElementById('txt-my-coords').innerText = t.txtMyCoords;
+      document.getElementById('txt-dist-target').innerText = t.txtDistTarget;
+      document.getElementById('txt-submit-btn').innerText = currentType === 'IN' ? t.txtSubmitBtnIn : t.txtSubmitBtnOut;
+      document.getElementById('txt-scanner-title').innerText = t.txtScannerTitle;
+      document.getElementById('txt-scan-hint').innerText = t.txtScanHint;
+      document.getElementById('txt-current-site-info').innerText = t.txtCurrentSiteInfo;
+      document.getElementById('txt-allowed-radius').innerText = t.txtAllowedRadius;
+      document.getElementById('txt-my-today-logs').innerText = t.txtMyTodayLogs;
+      document.getElementById('stat-lbl-total').innerText = t.statTotal;
+      document.getElementById('stat-lbl-today-in').innerText = t.statTodayIn;
+      document.getElementById('stat-lbl-today-out').innerText = t.statTodayOut;
+      document.getElementById('stat-lbl-workers').innerText = t.statActiveWorkers;
+      document.getElementById('txt-tab-summary').innerText = t.tabSummary;
+      document.getElementById('txt-tab-worker').innerText = t.tabWorker;
+      document.getElementById('txt-tab-qr').innerText = t.tabQr;
+      document.getElementById('txt-export-csv').innerText = t.txtExportCsv;
+      document.getElementById('lbl-select-worker').innerText = t.lblSelectWorker;
+      document.getElementById('txt-range-info').innerText = t.txtRangeInfo;
+      document.getElementById('txt-gen-qr-title').innerText = t.txtGenQrTitle;
+      document.getElementById('txt-gen-qr-desc').innerText = t.txtGenQrDesc;
+      document.getElementById('txt-print-qr').innerText = t.txtPrintQr;
+
+      evaluateGeofenceDistance();
+      renderPersonalTodayLogs();
+    }
+
+    function switchView(viewName) {
+      const vClockin = document.getElementById('view-clockin');
+      const vAdmin = document.getElementById('view-admin');
+      const navClock = document.getElementById('nav-clockin');
+      const navAdmin = document.getElementById('nav-admin');
+
+      if (viewName === 'clockin') {
+        vClockin.classList.remove('hidden');
+        vAdmin.classList.add('hidden');
+        navClock.classList.add('active');
+        navAdmin.classList.remove('active');
+      } else {
+        vAdmin.classList.remove('hidden');
+        vClockin.classList.add('hidden');
+        navAdmin.classList.add('active');
+        navClock.classList.remove('active');
+        renderAdminSummary();
+      }
+    }
+
+    function showToast(message, type = "info") {
+      const container = document.getElementById('toast-container');
+      const toast = document.createElement('div');
+      const bgColor = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-red-600' : 'bg-slate-800';
+      
+      toast.className = `${bgColor} text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 transform transition-all duration-300 pointer-events-auto`;
+      toast.innerHTML = `
+        <i class="fa-solid ${type === 'success' ? 'fa-circle-check' : type === 'error' ? 'fa-circle-exclamation' : 'fa-info-circle'}"></i>
+        <span>${message}</span>
+      `;
+
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+  </script>
+</body>
+</html>
